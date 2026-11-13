@@ -964,7 +964,7 @@ fun RadioCard(advanced: Boolean = false) {
             connected -> stringResource(R.string.radio_running, version ?: "")
             version != null -> stringResource(R.string.radio_stopped, version!!)
             else -> stringResource(R.string.radio_missing)
-        } + "\n" + stringResource(R.string.radio_hidden),
+        },
         ok = connected,
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {

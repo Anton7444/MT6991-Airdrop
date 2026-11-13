@@ -67,7 +67,6 @@
     <string name="radio_running">運行中 · %1$s</string>
     <string name="radio_stopped">已安裝（%1$s），未運行。</string>
     <string name="radio_missing">尚未安裝，需要 root（KernelSU）。</string>
-    <string name="radio_hidden">從隱藏資料夾運行，不是 KernelSU 模組。</string>
     <string name="install">安裝</string>
     <string name="reinstall">重新安裝</string>
     <string name="start">啟動</string>

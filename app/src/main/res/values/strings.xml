@@ -67,7 +67,6 @@
     <string name="radio_running">Running · %1$s</string>
     <string name="radio_stopped">Installed (%1$s), not running.</string>
     <string name="radio_missing">Not installed. Needs root (KernelSU).</string>
-    <string name="radio_hidden">Runs from a hidden folder, not a KernelSU module.</string>
     <string name="install">Install</string>
     <string name="reinstall">Reinstall</string>
     <string name="start">Start</string>
