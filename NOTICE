@@ -1,0 +1,12 @@
+MT6991-Airdrop
+
+The app, the root service scripts and the packaging tools in this repository are licensed under GPL-3.0-only (see LICENSE).
+
+Third-party components in app/src/main/assets/radio-opd2508.zip:
+
+- owly daemon (`owly`, `profiles/6/owly`): Owly 0.4.2 by happybear / t4t5, MIT license. The binary is patched at fixed offsets by app/src/main/radio/package-pad2.py: the Wi-Fi coexistence branches are restored to conditional, and the channel-6 profile rewrites the channel immediates from 149 to 6.
+- wonder.ko, owly_coex.ko: kernel modules from OPAirDrop by TimelessU (Weverses), GPL-2.0, built for the OnePlus Pad 2 on kernel 6.6.118-android15-8. Source: https://github.com/Weverses/OPAirDrop (commit 28a3a1dbc9f515fa5705417a3973616e5ae6180d).
+- mtk_wonder_dev.ko: platform-device shim for the MediaTek gen4m WLAN driver, GPL-2.0. Source: kernel/mtk_wonder_dev/mtk_wonder_dev.c in this repository.
+- Shell scripts in the radio package (stack.sh, owly-watch.sh and helpers) descend from the OPAirDrop and Owly packaging, GPL-3.0-only, modified for MT6991. Source: https://github.com/Weverses/OPAirDrop
+
+Redistribute with this attribution intact.

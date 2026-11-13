@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <queries>
+        <package android:name="com.coloros.oshare" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="file" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="*/*" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".AirDropApp"
+        android:allowBackup="false"
+        android:localeConfig="@xml/locales_config"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AirDrop">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ShareTargetActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.AirDrop.Translucent"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <provider android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.sharefiles" android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/share_paths" />
+        </provider>
+        <receiver android:name=".AnswerReceiver" android:exported="false" />
+
+        <service
+            android:name=".AirDropTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_airdrop"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true" />
+        </service>
+
+        <receiver android:name=".RelayReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="com.airdrop.android.action.EVENT" />
+            </intent-filter>
+        </receiver>
+
+        <receiver android:name=".ReceivedReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="com.airdrop.android.action.RECEIVED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
