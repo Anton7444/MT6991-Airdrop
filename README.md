@@ -1,3 +1,5 @@
+**English** | [繁體中文](README.zh-TW.md) | [简体中文](README.zh-CN.md)
+
 # MT6991-Airdrop
 
 AirDrop for MediaTek MT6991 (Dimensity 9400+) OnePlus / OPPO devices. Send and receive files with Apple devices over the stock Wi-Fi chip, with a control-panel tile, live activity cards in the system share app, real transfer progress, and a policy that keeps normal Wi-Fi working while AirDrop runs.
@@ -30,7 +32,7 @@ The app checks the latest GitHub release at most once a day (switchable in Setti
 ## Build
 
 ```
-gradle assembleDebug
+./gradlew assembleDebug
 ```
 
 Android SDK 36, JDK 17, Gradle 8.13. `app/src/main/radio/package-mt6991.py` rebuilds `app/src/main/assets/radio-mt6991.zip` from the scripts in `app/src/main/radio`.
