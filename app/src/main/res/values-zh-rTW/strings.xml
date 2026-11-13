@@ -146,4 +146,14 @@
     <string name="status_kernel">核心</string>
     <string name="status_kernel_ok">%1$s · 相容</string>
     <string name="status_kernel_no">%1$s · 無線電驅動是為 6.6.118 編譯</string>
+    <string name="status_update">更新</string>
+    <string name="update_title">更新</string>
+    <string name="update_current">目前版本 %1$s</string>
+    <string name="update_checking">正在檢查更新…</string>
+    <string name="update_latest">%1$s 已是最新版本。</string>
+    <string name="update_failed">無法連線到 GitHub。</string>
+    <string name="update_available">有新版本 %1$s</string>
+    <string name="update_check">檢查更新</string>
+    <string name="update_open">前往下載</string>
+    <string name="update_auto">自動檢查</string>
 </resources>

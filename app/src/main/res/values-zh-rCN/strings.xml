@@ -146,4 +146,14 @@
     <string name="status_kernel">内核</string>
     <string name="status_kernel_ok">%1$s · 兼容</string>
     <string name="status_kernel_no">%1$s · 无线电驱动是为 6.6.118 编译</string>
+    <string name="status_update">更新</string>
+    <string name="update_title">更新</string>
+    <string name="update_current">当前版本 %1$s</string>
+    <string name="update_checking">正在检查更新…</string>
+    <string name="update_latest">%1$s 已是最新版本。</string>
+    <string name="update_failed">无法连接到 GitHub。</string>
+    <string name="update_available">有新版本 %1$s</string>
+    <string name="update_check">检查更新</string>
+    <string name="update_open">前往下载</string>
+    <string name="update_auto">自动检查</string>
 </resources>

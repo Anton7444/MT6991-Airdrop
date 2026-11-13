@@ -146,4 +146,14 @@
     <string name="status_kernel">Kernel</string>
     <string name="status_kernel_ok">%1$s · compatible</string>
     <string name="status_kernel_no">%1$s · radio drivers are built for 6.6.118</string>
+    <string name="status_update">Update</string>
+    <string name="update_title">Updates</string>
+    <string name="update_current">Version %1$s</string>
+    <string name="update_checking">Checking for updates…</string>
+    <string name="update_latest">Version %1$s is the latest.</string>
+    <string name="update_failed">Could not reach GitHub.</string>
+    <string name="update_available">Version %1$s is available</string>
+    <string name="update_check">Check for updates</string>
+    <string name="update_open">Download</string>
+    <string name="update_auto">Check automatically</string>
 </resources>

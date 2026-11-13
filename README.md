@@ -17,6 +17,10 @@ Requires root with `/data/adb/service.d` boot-script support, and LSPosed. Teste
 - Wi-Fi coexistence is configurable: keep Wi-Fi connected and let AirDrop use a separate channel, or let AirDrop take priority while a transfer runs.
 - Removing the app removes the service: the watchdog notices the package is gone and cleans up after 90 seconds. The in-app Remove service button does the same immediately.
 
+## Updates
+
+The app checks the latest GitHub release at most once a day (switchable in Settings) and shows a banner on Home and in Settings when a newer version exists. This is the only network access the app uses; it sends no personal data. Downloading and installing stay manual.
+
 ## Install
 
 1. Install the APK and enable the module in LSPosed, scoped to the system share app.

@@ -56,8 +56,11 @@ import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
+import com.airdrop.android.BuildConfig
+import com.airdrop.android.update.Updater
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -272,6 +275,7 @@ fun StatusCard(connected: Boolean, status: Event.Status) {
     val rootOk by Hub.rootOk.collectAsStateWithLifecycle()
     val moduleVersion by Hub.moduleVersion.collectAsStateWithLifecycle()
     val lsp by Hub.lsposed.collectAsStateWithLifecycle()
+    val update by Updater.state.collectAsStateWithLifecycle()
     val model = android.os.Build.MODEL
     val supported = RadioInstaller.assetForModel(model) != null
     val kernel = remember { System.getProperty("os.version").orEmpty() }
@@ -369,6 +373,14 @@ fun StatusCard(connected: Boolean, status: Event.Status) {
                     shareVersion ?: none,
                     if (shareVersion != null) Level.Ok else Level.Warn,
                 )
+                (update as? Updater.State.Available)?.let {
+                    StatusRow(
+                        Icons.Rounded.SystemUpdate,
+                        stringResource(R.string.status_update),
+                        stringResource(R.string.update_available, it.version),
+                        Level.Warn,
+                    )
+                }
             }
         }
     }
@@ -730,6 +742,7 @@ fun SettingsScreen(padding: PaddingValues) {
                 )
             }
 
+            UpdateCard()
             LanguageCard()
             UninstallCard()
         }
@@ -793,6 +806,60 @@ private suspend fun waitForRadio(ctx: Context): String {
         kotlinx.coroutines.delay(500)
     }
     return ctx.getString(R.string.radio_not_up)
+}
+
+@Composable
+private fun UpdateCard() {
+    val ctx = LocalContext.current
+    val state by Updater.state.collectAsStateWithLifecycle()
+    val auto by Updater.auto.collectAsStateWithLifecycle()
+    val available = state as? Updater.State.Available
+    SettingsCard(
+        icon = Icons.Rounded.SystemUpdate,
+        accent = MaterialTheme.colorScheme.tertiaryContainer,
+        onAccent = MaterialTheme.colorScheme.onTertiaryContainer,
+        title = stringResource(R.string.update_title),
+        body = when (val s = state) {
+            Updater.State.Idle -> stringResource(R.string.update_current, BuildConfig.VERSION_NAME)
+            Updater.State.Checking -> stringResource(R.string.update_checking)
+            Updater.State.UpToDate -> stringResource(R.string.update_latest, BuildConfig.VERSION_NAME)
+            Updater.State.Failed -> stringResource(R.string.update_failed)
+            is Updater.State.Available -> stringResource(R.string.update_available, s.version)
+        },
+        ok = state == Updater.State.UpToDate,
+    ) {
+        available?.notes?.takeIf { it.isNotBlank() }?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FilledTonalButton(
+                enabled = state != Updater.State.Checking,
+                modifier = Modifier.weight(1f),
+                onClick = { Updater.check(ctx) },
+            ) { Text(stringResource(R.string.update_check), maxLines = 1) }
+            if (available != null && available.page.startsWith("https://")) {
+                Button(
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        runCatching {
+                            ctx.startActivity(
+                                android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(available.page))
+                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                    },
+                ) { Text(stringResource(R.string.update_open), maxLines = 1) }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(R.string.update_auto),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Switch(checked = auto, onCheckedChange = { Updater.setAuto(ctx, it) })
+        }
+    }
 }
 
 @Composable
