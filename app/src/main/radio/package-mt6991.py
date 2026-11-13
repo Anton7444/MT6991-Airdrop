@@ -93,7 +93,7 @@ def strip_hash_comments(data: bytes) -> bytes:
 
 def main() -> None:
     source = Path(__file__).resolve().parent
-    asset = source.parent / "assets" / "radio-opd2508.zip"
+    asset = source.parent / "assets" / "radio-mt6991.zip"
     staged = asset.with_suffix(".zip.new")
     try:
         with ZipFile(asset) as old, ZipFile(staged, "w") as new:

@@ -296,7 +296,7 @@ object Hub {
 
     private fun wakeFor(mac: String) = "send:$mac"
 
-    private fun fastSendMarker() = File(ctx.filesDir, "pad2-fast-send")
+    private fun fastSendMarker() = File(ctx.filesDir, "fast-send")
 
     @Synchronized private fun updateFastSendMarker() {
         if (!RadioInstaller.isMt6991()) return

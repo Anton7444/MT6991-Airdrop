@@ -2,7 +2,7 @@
 MODDIR=${1:-/data/adb/o13}
 STATE=/data/adb/owly/stack
 LOG=/data/adb/owly/daemon.log
-SEND_MARKER=/data/user/0/com.owly.android/files/pad2-fast-send
+SEND_MARKER=/data/user/0/com.owly.android/files/fast-send
 PIDFILE="$STATE/speed-watch.pid"
 mkdir -p "$STATE"
 old=$(cat "$PIDFILE" 2>/dev/null)

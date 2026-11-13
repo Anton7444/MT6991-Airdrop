@@ -23,7 +23,7 @@ object RadioInstaller {
     private const val ISLAND_KEY = "airdrop_island_stamp"
 
     internal fun assetForModel(model: String): String? = when (model.uppercase(java.util.Locale.ROOT)) {
-        "OPD2508", "PKT110", "PLB110" -> "radio-opd2508.zip"
+        "OPD2508", "PKT110", "PLB110" -> "radio-mt6991.zip"
         else -> null
     }
 

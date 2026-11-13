@@ -187,7 +187,7 @@ object Island {
 
     private var sessionOn: Boolean? = null
     @Volatile private var coexActive = false
-    private val pad2 = com.airdrop.android.daemon.RadioInstaller.isMt6991()
+    private val mt6991 = com.airdrop.android.daemon.RadioInstaller.isMt6991()
     private var lastNudge = 0L
     private var lastWriteLog = 0L
     private var lastEvent: String? = null
@@ -290,7 +290,7 @@ object Island {
                 module.log(android.util.Log.INFO, Module.TAG, "mode dropped to contacts mid-transfer, holding 1", null)
                 putShareState(1)
             }
-            1 -> if (!pad2 && sessionOn == false && System.currentTimeMillis() - lastNudge > NUDGE_GAP_MS) {
+            1 -> if (!mt6991 && sessionOn == false && System.currentTimeMillis() - lastNudge > NUDGE_GAP_MS) {
                 lastNudge = System.currentTimeMillis()
                 module.log(android.util.Log.INFO, Module.TAG, "no session, riding the 0 -> 1 edge", null)
                 nudgeSession()

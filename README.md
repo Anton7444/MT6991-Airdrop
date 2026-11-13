@@ -33,13 +33,13 @@ The app checks the latest GitHub release at most once a day (switchable in Setti
 gradle assembleDebug
 ```
 
-Android SDK 36, JDK 17, Gradle 8.13. `app/src/main/radio/package-pad2.py` rebuilds `app/src/main/assets/radio-opd2508.zip` from the scripts in `app/src/main/radio`.
+Android SDK 36, JDK 17, Gradle 8.13. `app/src/main/radio/package-mt6991.py` rebuilds `app/src/main/assets/radio-mt6991.zip` from the scripts in `app/src/main/radio`.
 
 ## Layout
 
 - `app/src/main/java` – app, daemon client and LSPosed module
 - `app/src/main/radio` – root service scripts, rate tuner source, packaging script
-- `app/src/main/assets/radio-opd2508.zip` – prebuilt radio package
+- `app/src/main/assets/radio-mt6991.zip` – prebuilt radio package
 - `kernel/mtk_wonder_dev` – source of the platform-device shim module
 
 ## License
