@@ -127,7 +127,7 @@ object RadioInstaller {
                 "[ \"\$n\" -lt 10 ] || { echo 'Daemon did not stop'; exit 1; }; sleep 1; n=\$((n + 1)); done; " +
                 "[ -f $STALE_BOOT ] && mv -f $STALE_BOOT $STALE_BOOT.parked-by-owly-app; " +
                 "chmod 644 /data/adb/service.d/*.parked-by-owly-app 2>/dev/null; " +
-                "pkill -f osharekeep.sh 2>/dev/null; " +
+                "pkill -f [o]sharekeep.sh 2>/dev/null; " +
                 "backup=$DIR.old.\$(date +%s).\$\$; " +
                 "if [ -d $DIR ]; then mv $DIR \"\$backup\" || exit 1; fi; " +
                 "if mv $stage $DIR; then rm -rf $DIR.old.*; echo SKY_OK; else " +
