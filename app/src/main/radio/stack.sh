@@ -84,6 +84,13 @@ rxhandler_stamp() {
         | sed -n 's/^\[ *\([0-9][0-9]*\)\..*/\1/p'
 }
 
+prepare_memory() {
+    sync
+    echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+    echo 1 > /proc/sys/vm/compact_memory 2>/dev/null
+    sleep 2
+}
+
 try_up() {
     for i in wonder0 awdl0; do
         [ -e /sys/class/net/$i ] && ip link set "$i" down 2>/dev/null
@@ -103,6 +110,7 @@ try_up() {
     loaded mtk_wonder_dev || load_shim || return $?
 
     if ! loaded wonder; then
+        prepare_memory
         insmod "$KO/wonder.ko" 2>>"$LOG" || {
             log "wonder load failed"
             echo "wonder failed"
