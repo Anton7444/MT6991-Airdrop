@@ -1,6 +1,6 @@
 # MT6991-Airdrop
 
-AirDrop for MediaTek MT6991 (Dimensity 9400) OnePlus / OPPO devices. Send and receive files with Apple devices over the stock Wi-Fi chip, with a control-panel tile, live activity cards in the system share app, real transfer progress, and a policy that keeps normal Wi-Fi working while AirDrop runs.
+AirDrop for MediaTek MT6991 (Dimensity 9400+) OnePlus / OPPO devices. Send and receive files with Apple devices over the stock Wi-Fi chip, with a control-panel tile, live activity cards in the system share app, real transfer progress, and a policy that keeps normal Wi-Fi working while AirDrop runs.
 
 | Device | Model | Status |
 | --- | --- | --- |
