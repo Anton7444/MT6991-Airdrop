@@ -9,26 +9,22 @@ object RadioInstaller {
     private const val TAG = "AirDrop"
 
     private const val DIR = "/data/adb/o13"
-    private const val BOOT = "/data/adb/service.d/airdrop-radio.sh"
     private const val START_LOG = "/data/local/tmp/airdrop-start.log"
 
     private const val LEGACY_MODULE = "/data/adb/modules/owly"
 
-    private const val STALE_BOOT = "/data/adb/service.d/owly-daemon.sh"
-    private const val STALE_WATCH_PID = "/data/adb/owly/stack/watch.pid"
 
     private const val PREFS = "airdrop"
     private const val KEY_OURS = "radio_installed_by_app"
     private const val KEY_SHARE_ORIG = "share_state_original"
-    private const val ISLAND_KEY = "airdrop_island_stamp"
 
-    internal fun assetForModel(model: String): String? = when (model.uppercase(java.util.Locale.ROOT)) {
-        "OPD2508", "PKT110", "PLB110" -> "radio-mt6991.zip"
-        else -> null
-    }
+    /** The only models the bundled MT6991 radio stack may be installed on. */
+    private val MT6991_MODELS = setOf("OPD2508", "PKT110", "PLB110")
 
     fun isMt6991(model: String = android.os.Build.MODEL): Boolean =
-        model.uppercase(java.util.Locale.ROOT) in setOf("OPD2508", "PKT110", "PLB110")
+        model.uppercase(java.util.Locale.ROOT) in MT6991_MODELS
+
+    internal fun assetForModel(model: String): String? = if (isMt6991(model)) "radio-mt6991.zip" else null
 
     fun hasRoot(): Boolean = su("id", 20).contains("uid=0")
 
@@ -50,6 +46,51 @@ object RadioInstaller {
         )
     }
 
+    /**
+     * Enables the module in LSPosed and scopes it to the share app. LSPosed keeps its settings in memory, so
+     * the module's package is then marked changed, which makes LSPosed read them again; failing that, a
+     * reboot applies them. Returns whether the database now says enabled and scoped.
+     */
+    fun grantLsposed(ctx: Context): Boolean {
+        val apk = ctx.applicationInfo.sourceDir
+        val out = su(
+            "CLASSPATH=$apk app_process /system/bin " +
+                "com.airdrop.android.daemon.LsposedSetup grant ${ctx.packageName} ${Ipc.SHARE_PKG} $apk 2>&1",
+            30,
+        )
+        Log.i(TAG, "LSPosed grant: ${out.trim().lines().lastOrNull().orEmpty()}")
+        if (!out.contains("granted")) return false
+        runCatching {
+            val c = android.content.ComponentName(ctx, com.airdrop.android.BootReceiver::class.java)
+            val pm = ctx.packageManager
+            val keep = android.content.pm.PackageManager.DONT_KILL_APP
+            pm.setComponentEnabledSetting(c, android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED, keep)
+            pm.setComponentEnabledSetting(c, android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DEFAULT, keep)
+        }.onFailure { Log.w(TAG, "could not nudge LSPosed: $it") }
+        return true
+    }
+
+    /** The last part of the daemon log, enough for a few minutes of STATS lines. */
+    fun daemonLogTail(): String = su("tail -c 60000 /data/adb/owly/daemon.log 2>/dev/null", 10)
+
+    /** Restarts the AirDrop session the way turning AirDrop off and on does: share mode 1 -> 0 -> 1. */
+    fun cycleShareState() {
+        suDetached("settings put system oshare_state 0; sleep 1; settings put system oshare_state 1")
+    }
+
+    /** True while an install or reinstall is running; nothing else may start the stack then. */
+    @Volatile var installing = false
+        private set
+
+    /**
+     * Whether any part of the stack is running: the daemon or its watchdog. Either one means a start is
+     * under way or the stack is being looked after, and the service script would kill a running daemon.
+     */
+    fun stackAlive(): Boolean = su(
+        "pidof owly >/dev/null && echo ALIVE; kill -0 \"\$(cat $WATCH_PID 2>/dev/null)\" 2>/dev/null && echo ALIVE",
+        10,
+    ).contains("ALIVE")
+
     private fun restoreShareState(ctx: Context): Int =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_SHARE_ORIG, 0).coerceAtLeast(0)
 
@@ -58,26 +99,16 @@ object RadioInstaller {
         if (!hasRoot()) return "no root"
         val script = File(ctx.cacheDir, "airdrop-uninstall.sh")
         return try {
-            script.writeText(
-                listOf(
-                    "D=$DIR",
-                    "[ -f /data/adb/owly/wifi-was-on ] && [ \"\$(settings get global wifi_on)\" != 1 ] && svc wifi enable",
-                    "[ -f \$D/bin/stack.sh ] && sh \$D/bin/stack.sh down >/dev/null 2>&1",
-                    "pkill -f owly-watch.sh; pkill -f speed-watch.sh; pkill -f osharekeep.sh; pkill -x owly",
-                    "sleep 1",
-                    "for m in owly_coex wonder mtk_wonder_dev; do grep -q \"^\$m \" /proc/modules && rmmod \$m 2>/dev/null; done",
-                    "settings put system oshare_state ${restoreShareState(ctx)}",
-                    "settings delete global airdrop_awdl_tx; settings delete global $ISLAND_KEY",
-                    "rm -f /data/adb/service.d/airdrop-radio.sh /data/adb/service.d/airdrop-speed.sh",
-                    "rm -rf \$D \$D.old.* \$D.stage.* \$D-coex-stage /data/adb/owly /data/etc/radio.toml /data/etc/drivers.toml $START_LOG",
-                    "rm -f /data/user/0/${Ipc.SHARE_PKG}/files/${Ipc.TOKEN_FILE}",
-                    "[ -e \$D ] || [ -e /data/adb/owly ] || echo SKY_REMOVED",
-                ).joinToString("\n", postfix = "\n"),
+            ctx.assets.open("radio-remove.sh").use { input -> script.outputStream().use { input.copyTo(it) } }
+            // Probe namespace access first; never repeat a partially executed removal on failure.
+            val out = su(
+                "if nsenter --mount=/proc/1/ns/mnt -- true 2>/dev/null; then " +
+                    "nsenter --mount=/proc/1/ns/mnt -- sh '${script.path}' 2>&1; else sh '${script.path}' 2>&1; fi", 60,
             )
-            val out = su("nsenter --mount=/proc/1/ns/mnt -- sh ${script.path} 2>&1 || sh ${script.path} 2>&1", 60)
-            if (out.contains("SKY_REMOVED")) {
-                ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_OURS, false).remove(KEY_SHARE_ORIG).apply()
-                ctx.getSharedPreferences("airdrop", Context.MODE_PRIVATE).edit().putBoolean("radio_installed", false).putBoolean("airdrop_on", false).apply()
+            if (out.lines().any { it.trim() == "SKY_REMOVED" }) {
+                ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putBoolean(KEY_OURS, false).remove(KEY_SHARE_ORIG)
+                    .putBoolean("radio_installed", false).putBoolean("airdrop_on", false).apply()
                 null
             } else out.trim().lines().lastOrNull().orEmpty().ifBlank { "unknown" }
         } finally {
@@ -87,66 +118,57 @@ object RadioInstaller {
 
     @Synchronized
     fun install(ctx: Context): Failure? {
+        installing = true
+        try { return installLocked(ctx) } finally { installing = false }
+    }
+
+    private fun installLocked(ctx: Context): Failure? {
         val asset = assetForModel(android.os.Build.MODEL) ?: return Failure.UnsupportedDevice
-        if (!su("id", 20).contains("uid=0")) return Failure.NoRoot
+        if (!hasRoot()) return Failure.NoRoot
         if (su("[ -d $LEGACY_MODULE ] && echo PRESENT", 20).contains("PRESENT")) return Failure.ExistingModule
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).let { sp ->
-            if (!sp.contains(KEY_SHARE_ORIG)) {
-                val now = runCatching { android.provider.Settings.System.getInt(ctx.contentResolver, "oshare_state", -1) }.getOrDefault(-1)
-                sp.edit().putInt(KEY_SHARE_ORIG, if (now == 1) 2 else now).apply()
-            }
+        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (!prefs.contains(KEY_SHARE_ORIG)) {
+            val now = runCatching { android.provider.Settings.System.getInt(ctx.contentResolver, "oshare_state", 0) }.getOrDefault(0)
+            prefs.edit().putInt(KEY_SHARE_ORIG, now.coerceAtLeast(0)).apply()
         }
         val zip = File(ctx.cacheDir, "radio.zip")
-        ctx.assets.open(asset).use { i -> zip.outputStream().use { o -> i.copyTo(o) } }
-        val boot = File(ctx.cacheDir, "airdrop-radio.sh").apply {
-            writeText(
-                "#!/system/bin/sh\n" +
-                    "ps -A | grep -q ' owly\$' && exit 0\n" +
-                    "[ -f $DIR/service.sh ] && cd $DIR && exec sh $DIR/service.sh\n"
-            )
+        val boot = File(ctx.cacheDir, "airdrop-radio.sh")
+        val script = File(ctx.cacheDir, "airdrop-install.sh")
+        return try {
+            ctx.assets.open(asset).use { input -> zip.outputStream().use { input.copyTo(it) } }
+            ctx.assets.open("radio-install.sh").use { input -> script.outputStream().use { input.copyTo(it) } }
+            boot.writeText("#!/system/bin/sh\n[ -f $DIR/service.sh ] && cd $DIR && exec sh $DIR/service.sh\n")
+            val country = java.util.Locale.getDefault().country.uppercase(java.util.Locale.ROOT)
+                .takeIf { it.matches(Regex("[A-Z]{2}")) } ?: "00"
+            val owned = if (ours(ctx)) 1 else 0
+            val out = su("sh '${script.path}' '${zip.path}' '${boot.path}' '$country' ${restoreShareState(ctx)} $owned 2>&1", 180)
+            if (!out.lines().any { it.trim() == "SKY_OK" }) {
+                Failure.Unpack(out.trim().takeLast(500))
+            } else {
+                prefs.edit().putBoolean(KEY_OURS, true).apply()
+                start(enableAirDrop = true)
+                null
+            }
+        } catch (e: Exception) {
+            Failure.Unpack(e.message ?: "Cannot prepare radio installation")
+        } finally {
+            script.delete()
+            boot.delete()
+            zip.delete()
         }
-        val stage = "$DIR.stage.${System.nanoTime()}"
-        val country = java.util.Locale.getDefault().country.uppercase().takeIf { it.matches(Regex("[A-Z]{2}")) } ?: "00"
-        val out = su(
-            "mkdir $stage || exit 1; " +
-                "trap 'rm -rf $stage' EXIT; " +
-                "unzip -oq '${zip.path}' -d $stage && " +
-                "[ -f $stage/module.prop ] && chmod 755 $stage/owly $stage/service.sh $stage/bin/* || exit 1; " +
-                "sed -i 's/^country = .*/country = \"$country\"/' $stage/etc/radio.toml; " +
-                "printf '%s' ${restoreShareState(ctx)} > $stage/share-original; " +
-                "mkdir -p /data/adb/service.d && cp '${boot.path}' $BOOT.new && " +
-                "chmod 755 $BOOT.new && mv -f $BOOT.new $BOOT || exit 1; " +
-                "watch_pid=\$(cat $STALE_WATCH_PID 2>/dev/null); " +
-                "case \"\$watch_pid\" in ''|*[!0-9]*) ;; *) " +
-                "if tr '\\000' ' ' < /proc/\$watch_pid/cmdline 2>/dev/null | grep -q 'owly-watch.sh'; then " +
-                "kill \"\$watch_pid\" 2>/dev/null; " +
-                "n=0; while kill -0 \"\$watch_pid\" 2>/dev/null; do " +
-                "[ \"\$n\" -lt 10 ] || { echo 'Watchdog did not stop'; exit 1; }; sleep 1; n=\$((n + 1)); done; fi;; esac; " +
-                "pkill -x owly 2>/dev/null; " +
-                "n=0; while pidof owly >/dev/null 2>&1; do " +
-                "[ \"\$n\" -lt 10 ] || { echo 'Daemon did not stop'; exit 1; }; sleep 1; n=\$((n + 1)); done; " +
-                "[ -f $STALE_BOOT ] && mv -f $STALE_BOOT $STALE_BOOT.parked-by-owly-app; " +
-                "chmod 644 /data/adb/service.d/*.parked-by-owly-app 2>/dev/null; " +
-                "pkill -f [o]sharekeep.sh 2>/dev/null; " +
-                "backup=$DIR.old.\$(date +%s).\$\$; " +
-                "if [ -d $DIR ]; then mv $DIR \"\$backup\" || exit 1; fi; " +
-                "if mv $stage $DIR; then rm -rf $DIR.old.*; echo SKY_OK; else " +
-                "[ ! -d \"\$backup\" ] || mv \"\$backup\" $DIR; exit 1; fi",
-            120,
-        )
-        boot.delete()
-        zip.delete()
-        if (!out.contains("SKY_OK")) {
-            start()
-            return Failure.Unpack(out.trim().take(300))
-        }
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_OURS, true).apply()
-        start(enableAirDrop = true)
-        return null
     }
 
     fun ours(ctx: Context): Boolean =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_OURS, false)
+
+    /**
+     * Asks the radio watchdog for a full rebuild on its next pass. Used when the user turns AirDrop back on:
+     * that is what people do when the device has stopped showing up, and a stack that only looks healthy
+     * would otherwise be left as it is.
+     */
+    fun requestRestart() {
+        suDetached("[ -d /data/adb/owly ] && touch /data/adb/owly/restart-request")
+    }
 
     fun setAirDropMode(on: Boolean) {
         suDetached("settings put system oshare_state ${if (on) 1 else 0}")
@@ -180,12 +202,61 @@ object RadioInstaller {
         suDetached("svc wifi ${if (on) "enable" else "disable"}")
     }
 
+    private const val WATCH_PID = "/data/adb/owly/stack/watch.pid"
+
+    /** Runs the service script unless both the daemon and its watchdog are alive; the script itself is idempotent. */
+    private const val START_STACK =
+        "[ -f $DIR/service.sh ] || exit 0; " +
+            "ps -A | grep -q ' owly\$' && kill -0 \"\$(cat $WATCH_PID 2>/dev/null)\" 2>/dev/null || " +
+            "(cd $DIR && setsid sh $DIR/service.sh </dev/null >$START_LOG 2>&1 &)"
+
+    @Synchronized
     fun start(enableAirDrop: Boolean = false) {
         val on = if (enableAirDrop) "[ \"\$(settings get system oshare_state)\" = 1 ] || settings put system oshare_state 1; " else ""
+        suDetached(on + START_STACK)
+    }
+
+    /** Restarts the watchdog if it died while the daemon kept running; nothing else looks after the radio then. */
+    @Synchronized
+    fun ensureSupervised() = suDetached(START_STACK)
+
+    /**
+     * Asks the system not to restrict this app in the background: without it the foreground service cannot be
+     * started from a broadcast, and doze defers the events the share app relays.
+     */
+    fun protectApp(pkg: String) {
+        if (!pkg.matches(Regex("[A-Za-z0-9_.]+"))) return
         suDetached(
-            on + "ps -A | grep -q ' owly\$' || (cd $DIR && setsid sh $DIR/service.sh </dev/null >$START_LOG 2>&1 &)",
+            "cmd deviceidle whitelist +$pkg; cmd appops set $pkg RUN_IN_BACKGROUND allow; " +
+                "cmd appops set $pkg RUN_ANY_IN_BACKGROUND allow; am set-standby-bucket $pkg active",
         )
     }
+
+    /**
+     * Launches the share app's process if it is not running, without showing anything: a content-provider
+     * lookup from root starts the process, which loads the module. Returns whether it is running afterwards.
+     */
+    fun wakeShareApp(): Boolean = su(
+        "content query --uri content://${Ipc.SHARE_PKG}.androidx-startup/airdrop >/dev/null 2>&1; pidof ${Ipc.SHARE_PKG}",
+        15,
+    ).trim().lines().firstOrNull()?.trim()?.isNotEmpty() == true
+
+    /** Restarts the share app so a module enabled after it started gets loaded. */
+    fun restartShareApp(): Boolean {
+        su("am force-stop ${Ipc.SHARE_PKG}", 15)
+        return wakeShareApp()
+    }
+
+    @Volatile private var bundled: String? = null
+
+    /** The radio version inside this APK; a newer APK does not update the installed radio by itself. */
+    fun bundledVersion(ctx: Context): String? = bundled ?: runCatching {
+        val asset = assetForModel(android.os.Build.MODEL) ?: return null
+        java.util.zip.ZipInputStream(ctx.assets.open(asset)).use { zip ->
+            generateSequence { zip.nextEntry }.firstOrNull { it.name == "module.prop" } ?: return null
+            zip.bufferedReader().lineSequence().firstOrNull { it.startsWith("version=") }?.removePrefix("version=")?.trim()
+        }
+    }.getOrNull()?.also { bundled = it }
 
     fun installedVersion(): String? =
         su("grep ^version= $DIR/module.prop 2>/dev/null", 20).trim().removePrefix("version=").ifEmpty { null }
@@ -194,6 +265,18 @@ object RadioInstaller {
         "echo '== su'; id; echo; " +
             "echo '== process'; ps -A | grep -E ' owly\$'; echo; " +
             "echo '== socket'; grep -a owly-android /proc/net/unix | head -3; echo; " +
+            "for p in \$(pidof owly); do echo \"== owly \$p\"; grep -E '^(State|VmRSS)' /proc/\$p/status; " +
+            "cat /proc/\$p/cgroup; echo \"oom_score_adj \$(cat /proc/\$p/oom_score_adj)\"; done; echo; " +
+            "echo '== share mode'; settings get system oshare_state; echo; " +
+            "echo '== watchdog process'; w=\$(cat /data/adb/owly/stack/watch.pid 2>/dev/null); " +
+            "if [ -n \"\$w\" ] && kill -0 \"\$w\" 2>/dev/null; then echo \"running \$w\"; cat /proc/\$w/cgroup; " +
+            "else echo \"NOT RUNNING (pid file: \${w:-none})\"; fi; " +
+            "echo \"wifi \$(iw dev wlan0 link 2>/dev/null | grep -E 'freq|signal' | tr '\n' ' ')\"; " +
+            "echo \"policy-5ghz \$([ -f /data/adb/owly/policy-5ghz ] && echo yes || echo no) coex-on \$([ -f /data/adb/owly/coex-on ] && echo yes || echo no)\"; echo; " +
+            "echo '== daemon (last stats and events)'; t=\$(tail -c 200000 /data/adb/owly/daemon.log 2>/dev/null); " +
+            "printf '%s\\n' \"\$t\" | grep -a STATS | tail -n 3; printf '%s\\n' \"\$t\" | grep -a -v STATS | tail -n 40; echo; " +
+            "echo '== watchdog'; tail -n 25 /data/adb/owly/stack/watch.log; echo; " +
+            "echo '== rate'; tail -n 8 /data/adb/owly/stack/speed-watch.log; echo; " +
             "echo '== files'; ls -la $DIR 2>&1 | head -12; echo; " +
             "for f in $START_LOG /data/adb/owly/stderr.log /data/adb/owly/stack/stack.log; do " +
             "echo \"== \$f\"; tail -n 30 \$f 2>/dev/null; echo; done",
@@ -251,6 +334,19 @@ object RadioInstaller {
         sb.toString()
     } catch (t: Throwable) {
         "[su failed: $t]"
+    }
+
+    /**
+     * Tells the radio watchdog whether AirDrop must stay on 5 GHz even when idle. Only the "turn Wi-Fi off"
+     * policy wants that; the others wait on 2.4 GHz so Wi-Fi is not slowed. policy-yield is the marker that
+     * used to keep "Wi-Fi yields" on 5 GHz all the time; it is removed so an older watchdog cannot act on it.
+     */
+    fun syncChannelMarker(stay5Ghz: Boolean) {
+        val marker = "/data/adb/owly/policy-5ghz"
+        suDetached(
+            "[ -d /data/adb/owly ] || exit 0; rm -f /data/adb/owly/policy-yield; " +
+                if (stay5Ghz) "[ -f $marker ] || touch $marker" else "rm -f $marker",
+        )
     }
 
     private fun suDetached(cmd: String) {

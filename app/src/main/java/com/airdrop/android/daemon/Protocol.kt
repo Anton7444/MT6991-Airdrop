@@ -15,6 +15,8 @@ data class Outgoing(
     val sent: Long = 0,
     val total: Long = 0,
     val error: String = "",
+    /** Smoothed bytes per second while sending; 0 until there is a measurement. */
+    val speed: Long = 0,
 ) {
     val fraction: Float get() = if (total > 0) (sent.toFloat() / total).coerceIn(0f, 1f) else 0f
     val active: Boolean get() = state == SendState.Asking || state == SendState.Sending
@@ -34,6 +36,8 @@ data class Incoming(
     val received: Long = 0,
     val paths: List<String> = emptyList(),
     val reason: String = "",
+    /** Smoothed bytes per second while receiving; 0 until there is a measurement. */
+    val speed: Long = 0,
 ) {
     val fraction: Float get() = if (total > 0) (received.toFloat() / total).coerceIn(0f, 1f) else 0f
     val count: Int get() = (fileNames.size + urls.size).coerceAtLeast(1)
@@ -160,6 +164,11 @@ fun parseEvent(o: JSONObject): Event = when (o.optString("ev")) {
     else -> Event.Unknown
 }
 
+private val WEB_URL = Regex("^https?://\\S+$", RegexOption.IGNORE_CASE)
+
+/** True only for a single http(s) address; every other scheme (intent:, file:, content:, tel:, ...) is refused. */
+fun isWebUrl(s: String): Boolean = WEB_URL.matches(s)
+
 object Cmd {
     fun discover(on: Boolean) = JSONObject().put("cmd", "discover").put("on", on)
     fun answer(id: Long, accept: Boolean) =
@@ -179,6 +188,7 @@ object Ipc {
 
     const val TOKEN_FILE = "airdrop-bridge-token"
 
+    @Synchronized
     fun appToken(ctx: android.content.Context): String {
         val prefs = ctx.getSharedPreferences("airdrop", android.content.Context.MODE_PRIVATE)
         prefs.getString("bridge_token", null)?.let { return it }

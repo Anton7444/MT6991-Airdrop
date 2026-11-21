@@ -46,7 +46,7 @@ object BleWakeAdvertiser {
     private var handler: Handler? = null
     private var advertiser: BluetoothLeAdvertiser? = null
     private var callback: AdvertiseCallback? = null
-    private var running = false
+    @Volatile private var running = false
     private var startedAt = 0L
     private var retries = 0
     private var grantTried = false
@@ -270,6 +270,9 @@ object BleWakeAdvertiser {
         else -> "unknown error code $code"
     }
 
+    /** Grant our own BLE permissions up front (root, falling back to the runtime dialog in MainActivity). */
+    fun ensurePermissions(ctx: Context): Boolean = permissions(ctx)
+
     private fun permissions(ctx: Context): Boolean {
         if (granted(ctx, Manifest.permission.BLUETOOTH_ADVERTISE) && granted(ctx, Manifest.permission.BLUETOOTH_CONNECT)) return true
         if (!grantTried) {
@@ -286,7 +289,7 @@ object BleWakeAdvertiser {
     private fun su(cmd: String, timeoutSec: Long): String = try {
         val p = ProcessBuilder("su", "-c", cmd).redirectErrorStream(true).start()
         p.outputStream.close()
-        val sb = StringBuilder()
+        val sb = StringBuffer() // appended on the reader thread, read here
         val reader = Thread { runCatching { p.inputStream.bufferedReader().forEachLine { sb.append(it).append('\n') } } }
             .apply { isDaemon = true; start() }
         if (!p.waitFor(timeoutSec, TimeUnit.SECONDS)) p.destroyForcibly() else reader.join(500)

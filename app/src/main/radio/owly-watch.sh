@@ -26,8 +26,14 @@ SESSION_GRACE_SKIPS=2
 
 PROFILE_6=$MODDIR/profiles/6/owly
 
+# Channel 149 (5 GHz) is fast but, beside Wi-Fi on another 5 GHz channel, makes
+# the chip switch channels and slows Wi-Fi to a crawl. Channel 6 (2.4 GHz) leaves
+# such Wi-Fi alone. With coexistence on, idle AirDrop therefore waits on 6; the
+# "Wi-Fi yields" policy turns coexistence off for each send, which moves it to
+# 149 until the send is over. policy-5ghz ("turn Wi-Fi off during transfers")
+# keeps it on 149 throughout, because Wi-Fi is off whenever it is in use.
 preferred_channel() {
-    if [ ! -f "$S/coex-on" ] || [ ! -x "$PROFILE_6" ]; then
+    if [ ! -f "$S/coex-on" ] || [ ! -x "$PROFILE_6" ] || [ -f "$S/policy-5ghz" ]; then
         echo 149
         return
     fi
@@ -38,6 +44,14 @@ preferred_channel() {
         *) echo 149 ;;
     esac
 }
+
+# Leave the cgroups of whatever started us. Started from the app's root shell the
+# watchdog and the daemon would otherwise be frozen, throttled (background CPU
+# set) or killed together with the app.
+for f in /sys/fs/cgroup/cgroup.procs /acct/cgroup.procs /dev/cg2_bpf/cgroup.procs     /dev/cpuset/cgroup.procs /dev/cpuctl/cgroup.procs /dev/stune/cgroup.procs /dev/blkio/cgroup.procs; do
+    [ -w "$f" ] && echo $$ > "$f" 2>/dev/null
+done
+echo -1000 > /proc/$$/oom_score_adj 2>/dev/null
 
 mkdir -p "$STATE"
 log() { echo "$(date '+%H:%M:%S') $*" >> "$LOG"; }
@@ -73,6 +87,31 @@ set_state() {
 
     log "could not write oshare_state=$want by any route"
     return 1
+}
+
+# The daemon appends to its log for ever and both watchers search it every few
+# seconds; without a cap that search grows until it competes with transfers.
+# The newest session lines are carried over because the loop below acts on them.
+LOG_CAP=2097152
+trim_logs() {
+    size=0
+    [ -f "$DAEMON_LOG" ] && size=$(wc -c < "$DAEMON_LOG")
+    if [ "${size:-0}" -gt "$LOG_CAP" ]; then
+        {
+            grep -a -e 'session up as' -e 'session down' -e 'holding off: Wi-Fi was turned back on' "$DAEMON_LOG" | tail -n 6
+            tail -n 1500 "$DAEMON_LOG"
+        } > "$DAEMON_LOG.tmp" 2>/dev/null && cat "$DAEMON_LOG.tmp" > "$DAEMON_LOG"
+        rm -f "$DAEMON_LOG.tmp"
+        log "trimmed the daemon log (was $size bytes)"
+    fi
+    for f in "$LOG" "$STATE/radio.log" "$STATE/stack.log" "$S/stderr.log"; do
+        [ -f "$f" ] || continue
+        size=$(wc -c < "$f")
+        if [ "${size:-0}" -gt 524288 ]; then
+            tail -n 800 "$f" > "$f.tmp" 2>/dev/null && cat "$f.tmp" > "$f"
+            rm -f "$f.tmp"
+        fi
+    done
 }
 
 SLEEP_FRAC=
@@ -136,7 +175,11 @@ start_owly() {
     rmmod owly_coex 2>/dev/null
     daemon=$MODDIR/owly
     [ "$CH" = 6 ] && daemon=$PROFILE_6
-    setsid "$daemon" android-daemon >> "$DAEMON_LOG" 2>&1 &
+    if command -v nice >/dev/null 2>&1; then
+        setsid nice -n -5 "$daemon" android-daemon >> "$DAEMON_LOG" 2>&1 &
+    else
+        setsid "$daemon" android-daemon >> "$DAEMON_LOG" 2>&1 &
+    fi
 }
 
 stop_owly() {
@@ -186,12 +229,67 @@ clear_awdl() {
 CH=$(preferred_channel)
 for daemon_pid in $(pidof owly); do
     case "$(readlink "/proc/$daemon_pid/exe")" in
-        "$PROFILE_6") CH=6 ;;
-        "$MODDIR/owly") CH=149 ;;
+        */profiles/6/owly) CH=6 ;;
+        */owly) CH=149 ;;
     esac
 done
 log "watchdog started (channel $CH, module $MODDIR, gated on oshare_state)"
 was_wanted=""
+
+# --- Liveness of a session that looks healthy --------------------------------
+# The interface checks below only see a radio that has fallen apart. A daemon
+# that hangs, is frozen, or whose radio stops transmitting leaves every interface
+# in place, so AirDrop silently disappears until the stack is rebuilt by hand.
+# While a session is up the daemon logs a STATS line every 10 s, and tx_action
+# rises steadily because it beacons even with nobody nearby; both stopping means
+# the session is dead whatever the interfaces say.
+LIVE_EVERY=15        # polls between checks (30 s)
+LIVE_STRIKES=3       # failed checks in a row before rebuilding (90 s)
+live_tick=0
+live_stats=""
+live_tx=""
+stale_strikes=0
+tx_strikes=0
+late_strikes=0
+
+reset_liveness() {
+    live_tick=0; live_stats=""; live_tx=""
+    stale_strikes=0; tx_strikes=0; late_strikes=0
+}
+
+# Sets dead_reason when the running session is dead. Not called through $(...):
+# the strike counters must survive between calls.
+session_dead() {
+    dead_reason=""
+    live_tick=$((live_tick + 1))
+    [ "$live_tick" -ge "$LIVE_EVERY" ] || return 0
+    live_tick=0
+    stats=$(tail -c 16384 "$DAEMON_LOG" 2>/dev/null | grep -a 'STATS tx_action' | tail -1)
+    if [ -z "$stats" ] || [ "$stats" = "$live_stats" ]; then
+        stale_strikes=$((stale_strikes + 1))
+        [ "$stale_strikes" -ge "$LIVE_STRIKES" ] && dead_reason="daemon has not reported for $((stale_strikes * LIVE_EVERY * POLL))s"
+        return 0
+    fi
+    stale_strikes=0
+    live_stats=$stats
+    tx=$(printf '%s\n' "$stats" | sed -n 's/.*STATS tx_action \([0-9]*\).*/\1/p')
+    if [ -n "$tx" ] && [ "$tx" = "$live_tx" ]; then
+        tx_strikes=$((tx_strikes + 1))
+        [ "$tx_strikes" -ge "$LIVE_STRIKES" ] && dead_reason="radio stopped transmitting (tx_action stuck at $tx)"
+    else
+        tx_strikes=0
+    fi
+    live_tx=$tx
+    late=$(printf '%s\n' "$stats" | sed -n 's/.*timer late avg \([0-9]*\).*/\1/p')
+    if [ -n "$late" ] && [ "$late" -gt 20000 ]; then
+        late_strikes=$((late_strikes + 1))
+        # AWDL keeps time in 16 ms slots; this late, peers lose sync with us.
+        [ "$late_strikes" -eq 1 ] && log "daemon timers run ${late}us late; the CPU is starving it"
+    else
+        late_strikes=0
+    fi
+    return 0
+}
 
 rx_traffic() {
     cat /sys/module/wonder/parameters/opairshare_wonder_rx 2>/dev/null
@@ -292,15 +390,31 @@ while true; do
         was_wanted="yes"
         rm -f "$MARK"
         between_rounds=0
+        reset_liveness
+    fi
+
+    # The app asks for a clean start when the user turns AirDrop back on: that is
+    # what someone does when the device has stopped showing up, so do a full
+    # rebuild rather than trust a stack that only looks healthy.
+    force=""
+    if [ -f "$S/restart-request" ]; then
+        rm -f "$S/restart-request"
+        force=1
     fi
 
     bad=""
-    if [ ! -e /sys/class/net/wonder0 ]; then bad="no wonder0"
+    if [ -n "$force" ]; then bad="restart requested by the app"
+    elif [ ! -e /sys/class/net/wonder0 ]; then bad="no wonder0"
     elif [ ! -e /sys/class/net/wondertap0 ]; then bad="no wondertap0"
     elif [ "$(cat /sys/class/net/wondertap0/operstate 2>/dev/null)" != "up" ]; then
         bad="wondertap0 is $(cat /sys/class/net/wondertap0/operstate 2>/dev/null)"
     elif [ ! -e /sys/class/net/awdl0 ]; then bad="no awdl0"
     elif ! pidof owly >/dev/null 2>&1; then bad="owly not running"
+    else
+        case "$(grep -a -e 'session up as' -e 'session down' "$DAEMON_LOG" 2>/dev/null | tail -1)" in
+            *'session up as'*) session_dead; bad=$dead_reason ;;
+            *) reset_liveness ;;
+        esac
     fi
 
     if [ -n "$bad" ]; then
@@ -310,6 +424,7 @@ while true; do
 
         between=0
         last_word=$(grep -a -e 'session up as' -e 'session down' "$DAEMON_LOG" 2>/dev/null | tail -1)
+        [ -n "$force" ] && last_word=forced
         case "$last_word" in
             *'session down'*) if pidof owly >/dev/null 2>&1; then
                 between=$(( ${between_rounds:-0} + 1 ))
@@ -323,7 +438,7 @@ while true; do
             *) between_rounds=0 ;;
         esac
 
-        if [ -n "$rx_delta" ]; then
+        if [ -n "$rx_delta" ] && [ -z "$force" ]; then
             [ -z "$hold_since" ] && hold_since=$(now)
             held=$(( $(now) - hold_since ))
             if [ "$held" -lt "$RX_HOLD_MAX" ]; then
@@ -335,7 +450,7 @@ while true; do
         fi
         hold_since=""
 
-        if [ "$gap" -lt "$MIN_GAP" ]; then
+        if [ "$gap" -lt "$MIN_GAP" ] && [ -z "$force" ]; then
             waited=$(( ${waited:-0} + $POLL ))
             [ $((waited % 15)) -eq 5 ] && log "unhealthy: $bad -- holding off ${gap}s/${MIN_GAP}s since the last restart"
             sleep "$POLL"
@@ -347,6 +462,7 @@ while true; do
         echo "$(now)" > "$MARK"
 
         last_rx=""
+        reset_liveness
 
         if ! stop_owly; then
             log "owly did not stop, retrying after ${MIN_GAP}s"
@@ -357,7 +473,12 @@ while true; do
         before=$(session_count)
         path=""
 
-        if light_rebuild; then
+        # A session that died with its interfaces intact was not saved by them; reload the radio.
+        case "$bad" in
+            'restart requested'*|'daemon has not'*|'radio stopped'*) light=no ;;
+            *) light=yes ;;
+        esac
+        if [ "$light" = yes ] && light_rebuild; then
             clear_awdl
             start_owly
             if wait_session 20 "$before"; then
@@ -396,6 +517,11 @@ while true; do
 
     if [ -z "$bad" ]; then
         between_rounds=0
+        trim_tick=$(( ${trim_tick:-0} + 1 ))
+        if [ "$trim_tick" -ge 150 ]; then
+            trim_tick=0
+            trim_logs
+        fi
         last=$(grep -a -e 'session up as' -e 'session down' "$DAEMON_LOG" 2>/dev/null | tail -1)
         case "$last" in
             *'session up as'*)

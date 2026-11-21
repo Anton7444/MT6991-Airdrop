@@ -20,6 +20,8 @@ import com.airdrop.android.ui.label
 object Notifier {
     private const val ASK = "airdrop_ask"
     private const val PROGRESS = "airdrop_progress"
+    private const val SERVICE = "airdrop_service"
+    const val KEEP_ALIVE_ID = 0x41440001
     private lateinit var ctx: Context
     private val nm get() = ctx.getSystemService(NotificationManager::class.java)
 
@@ -27,7 +29,25 @@ object Notifier {
         ctx = context
         nm.createNotificationChannel(NotificationChannel(ASK, ctx.getString(R.string.ch_ask), NotificationManager.IMPORTANCE_HIGH))
         nm.createNotificationChannel(NotificationChannel(PROGRESS, ctx.getString(R.string.ch_progress), NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(
+            NotificationChannel(SERVICE, ctx.getString(R.string.ch_service), NotificationManager.IMPORTANCE_MIN).apply { setShowBadge(false) },
+        )
     }
+
+    /** The notification the keep-alive service runs under. */
+    fun keepAlive(): Notification = Notification.Builder(ctx, SERVICE)
+        .setSmallIcon(R.drawable.ic_stat)
+        .setContentTitle(ctx.getString(R.string.keepalive_title))
+        .setContentText(ctx.getString(R.string.keepalive_text))
+        .setOngoing(true)
+        .setContentIntent(open())
+        .addAction(
+            Notification.Action.Builder(
+                null, ctx.getString(R.string.keepalive_off),
+                PendingIntent.getBroadcast(ctx, 3, Intent(ctx, TurnOffReceiver::class.java), PendingIntent.FLAG_IMMUTABLE),
+            ).build(),
+        )
+        .build()
 
     private fun allowed() = android.os.Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     private fun nid(id: Long) = (id % Int.MAX_VALUE).toInt()
@@ -77,6 +97,7 @@ object Notifier {
             .addAction(Notification.Action.Builder(null, ctx.getString(R.string.decline), answer(i.id, false)).build())
             .addAction(Notification.Action.Builder(null, ctx.getString(R.string.accept), answer(i.id, true)).build())
             .setOngoing(true)
+            .setOnlyAlertOnce(true) // the request arrives twice, from the socket and from the module
         if (i.thumbnailB64.isNotEmpty()) runCatching {
             val bytes = Base64.decode(i.thumbnailB64, Base64.DEFAULT)
             b.setLargeIcon(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
@@ -84,16 +105,29 @@ object Notifier {
         nm.notify(nid(i.id), b.build())
     }
 
-    fun cancelAsk(id: Long) = nm.cancel(nid(id))
+    fun cancelAsk(id: Long) {
+        progressAt.remove(id)
+        nm.cancel(nid(id))
+    }
+
+    /** Progress arrives many times a second; the system drops updates that fast and each one costs a binder call. */
+    private val progressAt = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    private const val PROGRESS_GAP_MS = 500L
 
     fun progress(i: Incoming) {
         if (!allowed()) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - (progressAt[i.id] ?: 0L) < PROGRESS_GAP_MS) return
+        progressAt[i.id] = now
         nm.notify(
             nid(i.id),
             Notification.Builder(ctx, PROGRESS)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle(ctx.getString(R.string.in_receiving, i.label(ctx)))
-                .setContentText(ctx.getString(R.string.progress_of, Formatter.formatShortFileSize(ctx, i.received), Formatter.formatShortFileSize(ctx, i.total)))
+                .setContentText(
+                    ctx.getString(R.string.progress_of, Formatter.formatShortFileSize(ctx, i.received), Formatter.formatShortFileSize(ctx, i.total)) +
+                        if (i.speed > 0) " · ${Formatter.formatShortFileSize(ctx, i.speed)}/s" else "",
+                )
                 .setProgress(100, (i.fraction * 100).toInt(), i.total <= 0)
                 .setOngoing(true).setOnlyAlertOnly()
                 .setContentIntent(open())

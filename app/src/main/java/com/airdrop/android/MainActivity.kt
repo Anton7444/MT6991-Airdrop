@@ -46,6 +46,14 @@ class MainActivity : ComponentActivity() {
             AirDropTheme {
                 val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
                 LaunchedEffect(Unit) { if (android.os.Build.VERSION.SDK_INT >= 33) ask.launch(Manifest.permission.POST_NOTIFICATIONS) }
+                val askBt = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+                LaunchedEffect(Unit) {
+                    if (android.os.Build.VERSION.SDK_INT >= 31) {
+                        val need = listOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT)
+                            .filter { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }
+                        if (need.isNotEmpty()) askBt.launch(need.toTypedArray())
+                    }
+                }
 
                 val owner = LocalLifecycleOwner.current
                 LaunchedEffect(owner) {
@@ -98,6 +106,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        Hub.syncKeepAlive() // a start that was refused in the background succeeds from here
     }
 
     override fun onNewIntent(intent: Intent) {

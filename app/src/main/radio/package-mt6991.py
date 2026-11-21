@@ -41,8 +41,8 @@ MODULE_PROP = "\n".join(
     [
         "id=owly",
         "name=AirDrop (MT6991)",
-        "version=1.0.0-mt6991",
-        "versionCode=100",
+        "version=1.0.3-mt6991",
+        "versionCode=103",
         "author=happybear; kernel stack ported from OPAirDrop (TimelessU/Weverses)",
         "description=AirDrop for MediaTek MT6991 devices: OnePlus Pad 2, OPPO Find X8s and X8s+.",
         "",
@@ -93,6 +93,7 @@ def strip_hash_comments(data: bytes) -> bytes:
 
 def main() -> None:
     source = Path(__file__).resolve().parent
+    # radio-install.sh / radio-remove.sh are generated into the APK by Gradle (syncRadioScripts).
     asset = source.parent / "assets" / "radio-mt6991.zip"
     staged = asset.with_suffix(".zip.new")
     try:

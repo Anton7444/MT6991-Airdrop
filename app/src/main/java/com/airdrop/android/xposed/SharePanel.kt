@@ -146,11 +146,16 @@ object SharePanel {
         m.log(Log.INFO, Module.TAG, "OnePlus Share 17.2.36 panel bridge installed", null)
     }
 
+    private val methods = java.util.concurrent.ConcurrentHashMap<String, java.lang.reflect.Method>()
+
+    /** Looked up once per (class, name, arity): this runs for every list refresh and progress step. */
     private fun call(obj: Any, name: String, vararg args: Any?): Any? {
         val type = if (obj is Class<*>) obj else obj.javaClass
-        val method = generateSequence(type) { it.superclass }.flatMap { it.declaredMethods.asSequence() }
-            .first { it.name == name && it.parameterCount == args.size }
-        method.isAccessible = true
+        val method = methods.getOrPut("${type.name}#$name/${args.size}") {
+            generateSequence(type) { it.superclass }.flatMap { it.declaredMethods.asSequence() }
+                .first { it.name == name && it.parameterCount == args.size }
+                .apply { isAccessible = true }
+        }
         return method.invoke(if (obj is Class<*>) null else obj, *args)
     }
     private fun key(device: Any?) = if (device == null) "" else runCatching { call(device, "a") as? String }.getOrNull().orEmpty()
@@ -167,11 +172,13 @@ object SharePanel {
         main.removeCallbacks(renewScan)
         renewScan.run()
         client.send(Cmd.discover(true))
+        runCatching { Island.relaySearch(true) }
     }
     private fun stopScan() {
         scanning = false
         main.removeCallbacks(renewScan)
         client.send(Cmd.discover(false))
+        runCatching { Island.relaySearch(false) }
         if (outgoing.isEmpty()) BleWakeAdvertiser.stop("panel")
     }
     fun onConnection(connected: Boolean) {
@@ -285,14 +292,14 @@ object SharePanel {
                 }
                 val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()?.trim().orEmpty()
                 val paths = arrayListOf<String>(); val urls = arrayListOf<String>()
-                if (uris.isEmpty() && text.matches(Regex("^https?://\\S+$"))) urls.add(text)
+                if (uris.isEmpty() && com.airdrop.android.daemon.isWebUrl(text)) urls.add(text)
                 else {
                     check(box.mkdirs())
                     uris.forEachIndexed { index, uri ->
                         val name = app.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null }
                             .orEmpty().substringAfterLast('/').substringAfterLast('\\').ifBlank { "file-$index" }
-                        val file = File(box, "${index}_$name")
-                        (app.contentResolver.openInputStream(uri) ?: error("Cannot open $uri")).use { input -> file.outputStream().use { input.copyTo(it) } }
+                        val file = Island.uniqueFile(box, name)
+                        (app.contentResolver.openInputStream(uri) ?: error("Cannot open $uri")).use { input -> file.outputStream().use { input.copyTo(it, 256 * 1024) } }
                         paths.add(file.path)
                     }
                     if (uris.isEmpty() && text.isNotBlank()) paths.add(File(box, "text.txt").apply { writeText(text) }.path)

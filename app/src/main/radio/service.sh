@@ -1,6 +1,11 @@
 #!/system/bin/sh
 cd "${0%/*}" || exit 1
 MODDIR=$PWD
+# Leave the cgroups of whatever started us (the app's root shell, when it is the
+# app that starts the radio) so the stack is not frozen or killed with the app.
+for f in /sys/fs/cgroup/cgroup.procs /acct/cgroup.procs /dev/cg2_bpf/cgroup.procs     /dev/cpuset/cgroup.procs /dev/cpuctl/cgroup.procs /dev/stune/cgroup.procs /dev/blkio/cgroup.procs; do
+    [ -w "$f" ] && echo $$ > "$f" 2>/dev/null
+done
 S=/data/adb/owly
 STACK=$S/stack
 mkdir -p "$S" "$STACK" /data/etc

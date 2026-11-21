@@ -232,7 +232,8 @@ fun OutgoingStatus(
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         val text = when (o.state) {
             SendState.Asking -> stringResource(R.string.st_waiting)
-            SendState.Sending -> stringResource(R.string.st_sending, humanSize(o.sent), humanSize(o.total))
+            SendState.Sending -> stringResource(R.string.st_sending, humanSize(o.sent), humanSize(o.total)) +
+                if (o.speed > 0) " · ${humanSize(o.speed)}/s" else ""
             SendState.Delivered -> stringResource(R.string.st_delivered)
             SendState.Declined -> stringResource(R.string.st_declined)
             SendState.Cancelled -> stringResource(R.string.st_cancelled)
@@ -348,7 +349,8 @@ fun IncomingCard(
                     if (i.total > 0) LinearProgressIndicator(progress = { i.fraction }, modifier = Modifier.fillMaxWidth())
                     else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     Text(
-                        stringResource(R.string.progress_of, humanSize(i.received), humanSize(i.total)),
+                        stringResource(R.string.progress_of, humanSize(i.received), humanSize(i.total)) +
+                            if (i.speed > 0) " · ${humanSize(i.speed)}/s" else "",
                         style = MaterialTheme.typography.labelMedium,
                     )
                     FilledTonalButton(onClick = onCancel, contentPadding = pad) {

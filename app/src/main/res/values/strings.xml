@@ -93,7 +93,7 @@
     <string name="policy_keep">Keep Wi-Fi</string>
     <string name="policy_keep_sub">AirDrop moves to the 2.4 GHz band so Wi-Fi is never interrupted. Speed is limited (about 4 MB/s).</string>
     <string name="policy_yield">Wi-Fi yields</string>
-    <string name="policy_yield_sub">Wi-Fi stays connected normally. During a transfer it steps aside so AirDrop is faster, then returns.</string>
+    <string name="policy_yield_sub">Wi-Fi stays fast: AirDrop waits on 2.4 GHz. When you send, AirDrop moves to 5 GHz and Wi-Fi pauses so the send runs at full speed, then both come back. Sends take about 10 s longer to start. Receiving uses 2.4 GHz (about 4 MB/s).</string>
     <string name="lang_title">Language</string>
     <string name="lang_body">Follows the system by default.</string>
     <string name="lang_system">System default</string>
@@ -155,4 +155,23 @@
     <string name="update_check">Check for updates</string>
     <string name="update_open">Download</string>
     <string name="update_auto">Check automatically</string>
+    <string name="policy_stop">Wi-Fi off during transfer</string>
+    <string name="policy_stop_sub">AirDrop runs at full speed on 5 GHz. Wi-Fi is turned off while a transfer runs and back on 3 seconds after it ends.</string>
+    <string name="ch_service">AirDrop service</string>
+    <string name="keepalive_title">AirDrop is on</string>
+    <string name="keepalive_text">Nearby Apple devices can find this device</string>
+    <string name="keepalive_off">Turn off</string>
+    <string name="copy_log">Copy</string>
+    <string name="radio_outdated">Running · %1$s — this app carries %2$s: Settings → Reinstall</string>
+    <string name="health_checking">Checking the AirDrop service…</string>
+    <string name="health_ready">AirDrop service ready</string>
+    <string name="health_starting">Starting the AirDrop service…</string>
+    <string name="health_noroot">Root access is needed</string>
+    <string name="health_radiodown">The AirDrop service won\'t start</string>
+    <string name="health_share">OnePlus Share isn\'t responding</string>
+    <string name="health_check">Check again</string>
+    <string name="log_loading">Reading the service log…</string>
+    <string name="log_refresh">Refresh</string>
+    <string name="restart_share">Restart OnePlus Share</string>
+    <string name="health_outdated">AirDrop service is outdated</string>
 </resources>

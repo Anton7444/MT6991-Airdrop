@@ -170,6 +170,7 @@ object Island {
         SharePanel.onConnection(up)
         if (!up) {
             coexActive = false
+            sessionOn = null // the daemon restarts when the channel changes; wait for its new status
             sawDownSince = System.currentTimeMillis()
             return
         }
@@ -185,7 +186,7 @@ object Island {
         File(app.cacheDir, "owly-send").listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.deleteRecursively() }
     }
 
-    private var sessionOn: Boolean? = null
+    @Volatile private var sessionOn: Boolean? = null
     @Volatile private var coexActive = false
     private val mt6991 = com.airdrop.android.daemon.RadioInstaller.isMt6991()
     private var lastNudge = 0L
@@ -323,12 +324,29 @@ object Island {
 
     private const val APP_NS_FALLBACK = "com.airdrop.android"
 
-    private fun appNamespace(): String =
-        runCatching { app.packageManager.getLaunchIntentForPackage(appPkg)?.component?.className }
+    @Volatile private var appNs: String? = null
+
+    /** Resolved once: asking the package manager for every relayed event costs a binder call each time. */
+    private fun appNamespace(): String = appNs
+        ?: runCatching { app.packageManager.getLaunchIntentForPackage(appPkg)?.component?.className }
             .getOrNull()
             ?.substringBeforeLast('.')
             ?.takeIf { it.isNotBlank() }
-            ?: APP_NS_FALLBACK
+            ?.also { appNs = it }
+        ?: APP_NS_FALLBACK
+
+    @Volatile private var token: String? = null
+    @Volatile private var tokenReadAt = 0L
+
+    /** The bridge token, re-read from disk at most every few seconds instead of once per event. */
+    private fun bridgeToken(): String? {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val cached = token
+        if (cached != null && now - tokenReadAt < TOKEN_TTL_MS) return cached
+        return Ipc.moduleToken(app).also { token = it; tokenReadAt = now }
+    }
+
+    private const val TOKEN_TTL_MS = 10_000L
 
     private val worker by lazy { android.os.HandlerThread("airdrop-bridge").apply { start() } }
 
@@ -344,6 +362,14 @@ object Island {
                 )
                 if (!fromApp(sender, i)) return
                 when (i.getStringExtra("cmd")) {
+                    // Lets the app tell a running module from a share app that is not running at all.
+                    "ping" -> {
+                        // The ping is also how the app thaws this process after the system froze it. A frozen
+                        // reader may have missed lines, or lost its connection; ask again so a dead socket
+                        // shows up now (the write fails and the client reconnects) instead of in 50 s.
+                        client.send(Cmd.status(), ttlMs = 0)
+                        relay("{\"ev\":\"pong\",\"daemon\":${client.isConnected}}")
+                    }
                     "discover" -> {
                         val on = i.getBooleanExtra("on", false)
                         module.log(android.util.Log.INFO, Module.TAG, "app asked to discover=$on", null)
@@ -373,7 +399,7 @@ object Island {
         module.log(android.util.Log.INFO, Module.TAG, "bridge ready ($BUILD)", null)
     }
 
-    private const val BUILD = "fix12-reliability"
+    private const val BUILD = "fix13-keepalive"
 
     private const val SHARE_STATE_KEY = "oshare_state"
 
@@ -393,11 +419,18 @@ object Island {
     }
 
     private fun tokenOk(given: String?): Boolean {
-        val mine = Ipc.moduleToken(app) ?: return false
+        // Commands are rare and must see a freshly provisioned token at once: read it, and refresh the cache.
+        val mine = Ipc.moduleToken(app).also { token = it; tokenReadAt = android.os.SystemClock.elapsedRealtime() } ?: return false
         return given != null && java.security.MessageDigest.isEqual(given.toByteArray(), mine.toByteArray())
     }
 
     private fun fromApp(sentFromUid: Int, i: Intent): Boolean {
+        // The token is always required. A sender Android positively identifies as some other app is refused outright.
+        val expected = appUid()
+        if (sentFromUid >= 0 && expected >= 0 && sentFromUid != expected) {
+            module.log(android.util.Log.WARN, Module.TAG, "ignoring a command from uid $sentFromUid", null)
+            return false
+        }
         return tokenOk(i.getStringExtra("token"))
     }
 
@@ -422,7 +455,7 @@ object Island {
                 for (uri in uris) {
                     val f = uniqueFile(box, nameOf(uri))
                     val input = app.contentResolver.openInputStream(uri) ?: error("Cannot open shared file")
-                    input.use { s -> f.outputStream().use { o -> s.copyTo(o) } }
+                    input.use { s -> f.outputStream().use { o -> s.copyTo(o, 256 * 1024) } }
                     paths += f.path
                 }
             } catch (t: Throwable) {
@@ -433,7 +466,7 @@ object Island {
             }
             val urls = ArrayList<String>()
             if (text.isNotEmpty()) {
-                if (Regex("^https?://\\S+$").matches(text)) urls += text
+                if (com.airdrop.android.daemon.isWebUrl(text)) urls += text
                 else paths += File(box, "text.txt").apply { writeText(text) }.path
             }
             if (paths.isEmpty() && urls.isEmpty()) {
@@ -455,7 +488,7 @@ object Island {
         return u.lastPathSegment?.substringAfterLast('/') ?: "shared-file"
     }
 
-    private fun uniqueFile(dir: File, name: String): File {
+    internal fun uniqueFile(dir: File, name: String): File {
         var f = File(dir, name); var n = 1
         val stem = name.substringBeforeLast('.', name)
         val ext = name.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" }
@@ -464,18 +497,23 @@ object Island {
     }
 
     private val RELAYED = setOf(
-        "peers", "transfer", "incoming", "receiving", "received", "urls", "withdrawn", "failed", "show", "wake",
+        "peers", "transfer", "incoming", "receiving", "received", "urls", "withdrawn", "failed", "show", "wake", "pong", "search",
     )
 
     private val lastRelayAt = ConcurrentHashMap<String, Long>()
     @Volatile private var lastRelayLog = 0L
     @Volatile private var lastOutgoingLog = 0L
 
+    @Volatile private var lastQuietLine = ""
+
+    /** Tells the app the share panel started or stopped searching for iPhones. */
+    fun relaySearch(on: Boolean) = relay("{\"ev\":\"search\",\"on\":$on}")
+
     private fun relay(line: String) {
         try {
-            val ev = org.json.JSONObject(line).optString("ev")
+            val j = org.json.JSONObject(line) // parsed once; this runs for every line the daemon sends
+            val ev = j.optString("ev")
             if (ev == "transfer" || ev == "receiving") {
-                val j = org.json.JSONObject(line)
                 val key = ev + ":" + j.optString("mac", j.optString("id"))
                 val st = j.optString("state")
                 val total = j.optLong("total")
@@ -488,13 +526,16 @@ object Island {
                     lastRelayLog = now
                     module.log(android.util.Log.INFO, Module.TAG, "daemon -> module: $line", null)
                 }
-            } else {
+            } else if (ev in RELAYED) {
+                module.log(android.util.Log.INFO, Module.TAG, "daemon -> module: $line", null)
+            } else if (line != lastQuietLine) {
+                // Status answers repeat every few seconds; one unchanged line in the log is enough.
+                lastQuietLine = line
                 module.log(android.util.Log.INFO, Module.TAG, "daemon -> module: $line", null)
             }
             if (ev !in RELAYED) return
             var line = line
             if (ev == "transfer") {
-                val j = org.json.JSONObject(line)
                 val st = j.optString("state")
                 val mac = j.optString("mac")
                 val total = j.optLong("total")
@@ -505,7 +546,10 @@ object Island {
                 .setPackage(appPkg)
                 .setClassName(appPkg, "${appNamespace()}.RelayReceiver")
                 .putExtra(Ipc.EXTRA_JSON, line)
-                .putExtra(Ipc.EXTRA_TOKEN, Ipc.moduleToken(app) ?: return)
+                .putExtra(Ipc.EXTRA_TOKEN, bridgeToken() ?: return)
+                // Foreground queue: an ordinary broadcast waits behind every other app's and, on Android 14+,
+                // is held back for minutes when the receiver is cached.
+                .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             app.sendBroadcast(i)
         } catch (t: Throwable) {
             module.log(android.util.Log.WARN, Module.TAG, "could not relay $line", t)
@@ -666,18 +710,6 @@ object Island {
         lastEventAt = now
         module.log(android.util.Log.INFO, Module.TAG, "card event=$event id=$current", null)
     }
-
-    @Suppress("unused")
-    private fun dumpBundle(b: android.os.Bundle): String =
-        b.keySet().joinToString(", ") { k ->
-            val v = runCatching { b.get(k) }.getOrNull()
-            when (v) {
-                null -> "$k=null"
-                is android.os.Bundle -> "$k=Bundle{${dumpBundle(v)}}"
-                is Array<*> -> "$k=${v.javaClass.simpleName}[${v.size}](${v.joinToString(";") { it?.toString().orEmpty() }})"
-                else -> "$k=${v.javaClass.simpleName}:${v.toString().take(200)}"
-            }
-        }
 
     private fun openAfterReceive(): Boolean {
         val name = lastReceived ?: return false

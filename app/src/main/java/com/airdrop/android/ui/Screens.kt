@@ -174,6 +174,18 @@ fun NearbyScreen(padding: PaddingValues) {
     }
     DisposableEffect(Unit) { onDispose { Hub.discover(false) } }
     LaunchedEffect(Unit) { Hub.refreshRoot() }
+    // Coming back to the app does not recompose anything, so nothing above runs again: ask afresh on every
+    // return to the foreground. Not on a timer: each discover request restarts the daemon's browse.
+    val screenOwner = LocalLifecycleOwner.current
+    LaunchedEffect(screenOwner) {
+        screenOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            Hub.refreshStatus()
+            Hub.refreshDiscovery()
+            Hub.checkHealthNow()
+        }
+    }
+    val health by Hub.health.collectAsStateWithLifecycle()
+    var showLog by remember { mutableStateOf(false) }
 
     Screen(stringResource(R.string.nav_nearby), padding) { inner ->
         LazyColumn(
@@ -203,7 +215,11 @@ fun NearbyScreen(padding: PaddingValues) {
                 }
             }
             item { RadarHero(connected, status, enabled, onToggle = Hub::setAirDrop) }
-            if (!connected) item { RadioCard() }
+            item { HealthCard(health, enabled, onShowLog = { showLog = true }) }
+            // The service starts by itself; the card is only needed to install it, or when it will not start.
+            if (health == Hub.Health.Outdated ||
+                (!connected && (health == Hub.Health.NotInstalled || health == Hub.Health.RadioDown))
+            ) item { RadioCard(outdated = health == Hub.Health.Outdated) }
             if (peers.isNotEmpty()) {
                 item {
                     NearbyPeers(peers, outgoing, sent, unknown, onSend = { target = it })
@@ -214,6 +230,7 @@ fun NearbyScreen(padding: PaddingValues) {
     }
 
     target?.let { SendSheet(it, onDismiss = { target = null }) }
+    if (showLog) ServiceLogScreen(onClose = { showLog = false })
 }
 
 private enum class Level { Ok, Warn }
@@ -264,10 +281,16 @@ fun StatusCard(connected: Boolean, status: Event.Status) {
     var tick by remember { mutableIntStateOf(0) }
     LaunchedEffect(owner) {
         owner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            var round = 0 // restarts on every return to the foreground, so the first round always refreshes
             while (true) {
                 tick++
-                Hub.refreshLsposed()
-                if (Hub.rootOk.value != true || tick % 6 == 0) Hub.refreshRoot()
+                // Each of these starts a root shell (and a whole runtime for the LSPosed query); doing it
+                // every few seconds steals CPU from a transfer the user is watching on this very screen.
+                // Even when something is wrong, every 20 s is enough: the LSPosed query spawns a whole runtime
+                // as root, and doing that every 4 s made this screen stutter.
+                if (round % 15 == 0 || (round % 5 == 0 && Hub.lsposed.value?.let { it.known && it.enabled && it.scoped } != true)) Hub.refreshLsposed()
+                if (round % 15 == 0 || (round % 5 == 0 && Hub.rootOk.value != true)) Hub.refreshRoot()
+                round++
                 delay(4_000)
             }
         }
@@ -279,6 +302,10 @@ fun StatusCard(connected: Boolean, status: Event.Status) {
     val model = android.os.Build.MODEL
     val supported = RadioInstaller.assetForModel(model) != null
     val kernel = remember { System.getProperty("os.version").orEmpty() }
+    var bundledRadio by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { bundledRadio = withContext(Dispatchers.IO) { RadioInstaller.bundledVersion(ctx) } }
+    val installedRadio = moduleVersion ?: status.version
+    val radioOutdated = connected && bundledRadio != null && installedRadio.isNotBlank() && installedRadio != bundledRadio
     val kernelOk = kernel.startsWith("6.6.118")
     val live = tick
     val granted = android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -346,8 +373,12 @@ fun StatusCard(connected: Boolean, status: Event.Status) {
                 StatusRow(
                     Icons.Rounded.SettingsInputAntenna,
                     stringResource(R.string.status_radio),
-                    if (connected) stringResource(R.string.radio_running, moduleVersion ?: status.version) else stringResource(R.string.status_radio_off),
-                    if (connected) Level.Ok else Level.Warn,
+                    when {
+                        radioOutdated -> stringResource(R.string.radio_outdated, installedRadio, bundledRadio ?: "")
+                        connected -> stringResource(R.string.radio_running, installedRadio)
+                        else -> stringResource(R.string.status_radio_off)
+                    },
+                    if (connected && !radioOutdated) Level.Ok else Level.Warn,
                 )
                 StatusRow(
                     Icons.Rounded.Extension,
@@ -367,11 +398,27 @@ fun StatusCard(connected: Boolean, status: Event.Status) {
                     ),
                     if (btGranted && btOn) Level.Ok else Level.Warn,
                 )
+                val restarting by Hub.restartingShare.collectAsStateWithLifecycle()
                 StatusRow(
                     Icons.Rounded.Apps,
                     stringResource(R.string.status_share),
                     shareVersion ?: none,
                     if (shareVersion != null) Level.Ok else Level.Warn,
+                    action = if (shareVersion == null) null else {
+                        {
+                            FilledTonalButton(
+                                enabled = !restarting && rootOk == true,
+                                onClick = Hub::restartShareApp,
+                                modifier = Modifier.padding(top = 8.dp),
+                            ) {
+                                if (restarting) {
+                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Text(stringResource(R.string.restart_share), maxLines = 1)
+                            }
+                        }
+                    },
                 )
                 (update as? Updater.State.Available)?.let {
                     StatusRow(
@@ -945,27 +992,27 @@ private fun LanguageCard() {
 }
 
 @Composable
-fun RadioCard(advanced: Boolean = false) {
+fun RadioCard(advanced: Boolean = false, outdated: Boolean = false) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val connected by Hub.connected.collectAsStateWithLifecycle()
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var version by remember { mutableStateOf<String?>(null) }
-    var log by remember { mutableStateOf<String?>(null) }
+    var showLog by remember { mutableStateOf(false) }
     LaunchedEffect(connected) { version = withContext(Dispatchers.IO) { RadioInstaller.installedVersion() } }
 
     SettingsCard(
         icon = Icons.Rounded.SettingsInputAntenna,
-        accent = if (connected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.errorContainer,
-        onAccent = if (connected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onErrorContainer,
+        accent = if (connected && !outdated) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.errorContainer,
+        onAccent = if (connected && !outdated) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onErrorContainer,
         title = stringResource(R.string.radio_title),
         body = when {
             connected -> stringResource(R.string.radio_running, version ?: "")
             version != null -> stringResource(R.string.radio_stopped, version!!)
             else -> stringResource(R.string.radio_missing)
         },
-        ok = connected,
+        ok = connected && !outdated,
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             if (!advanced && version != null && !connected) {
@@ -991,6 +1038,7 @@ fun RadioCard(advanced: Boolean = false) {
                         is RadioInstaller.Failure.Unpack -> ctx.getString(R.string.err_unpack, r.detail)
                     }
                     version = withContext(Dispatchers.IO) { RadioInstaller.installedVersion() }
+                    Hub.checkHealthNow()
                     busy = false
                 }
             }
@@ -1005,25 +1053,11 @@ fun RadioCard(advanced: Boolean = false) {
             if (primary) Button(enabled = !busy, modifier = Modifier.weight(1f), onClick = onInstall, content = buttonContent)
             else FilledTonalButton(enabled = !busy, modifier = Modifier.weight(1f), onClick = onInstall, content = buttonContent)
         }
-        TextButton(onClick = { scope.launch { log = withContext(Dispatchers.IO) { RadioInstaller.log() } } }) {
+        TextButton(onClick = { showLog = true }) {
             Text(stringResource(R.string.radio_log))
         }
         message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 
-    log?.let {
-        AlertDialog(
-            onDismissRequest = { log = null },
-            confirmButton = { TextButton(onClick = { log = null }) { Text(stringResource(R.string.close)) } },
-            title = { Text(stringResource(R.string.radio_log)) },
-            text = {
-                Text(
-                    it,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
-                )
-            },
-        )
-    }
+    if (showLog) ServiceLogScreen(onClose = { showLog = false })
 }

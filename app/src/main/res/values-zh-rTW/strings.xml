@@ -93,7 +93,7 @@
     <string name="policy_keep">保持 Wi-Fi</string>
     <string name="policy_keep_sub">AirDrop 改用 2.4 GHz 頻段，Wi-Fi 完全不受影響，但速度受限（約 4 MB/s）。</string>
     <string name="policy_yield">Wi-Fi 讓路</string>
-    <string name="policy_yield_sub">平時 Wi-Fi 正常連線；傳輸時讓路給 AirDrop 以加快速度，結束後自動恢復。</string>
+    <string name="policy_yield_sub">Wi-Fi 保持快速：AirDrop 平時在 2.4 GHz 待命。傳出檔案時改用 5 GHz 並暫停 Wi-Fi 以全速傳送，結束後兩者恢復。傳送開始約慢 10 秒。接收使用 2.4 GHz（約 4 MB/s）。</string>
     <string name="lang_title">語言</string>
     <string name="lang_body">預設跟隨系統。</string>
     <string name="lang_system">跟隨系統</string>
@@ -155,4 +155,23 @@
     <string name="update_check">檢查更新</string>
     <string name="update_open">前往下載</string>
     <string name="update_auto">自動檢查</string>
+    <string name="policy_stop">傳輸時關閉 Wi-Fi</string>
+    <string name="policy_stop_sub">AirDrop 用 5 GHz 全速傳輸。傳輸期間關閉 Wi-Fi，結束 3 秒後自動重新開啟。</string>
+    <string name="ch_service">AirDrop 服務</string>
+    <string name="keepalive_title">AirDrop 已開啟</string>
+    <string name="keepalive_text">附近的 Apple 裝置可以找到這部裝置</string>
+    <string name="keepalive_off">關閉</string>
+    <string name="copy_log">複製</string>
+    <string name="radio_outdated">運行中 · %1$s — 新版 %2$s 尚未安裝：設定 → 重新安裝</string>
+    <string name="health_checking">正在檢查 AirDrop 服務…</string>
+    <string name="health_ready">AirDrop 服務已就緒</string>
+    <string name="health_starting">正在啟動 AirDrop 服務…</string>
+    <string name="health_noroot">需要 Root 權限</string>
+    <string name="health_radiodown">AirDrop 服務無法啟動</string>
+    <string name="health_share">OnePlus Share 沒有回應</string>
+    <string name="health_check">重新檢查</string>
+    <string name="log_loading">正在讀取服務日誌…</string>
+    <string name="log_refresh">重新整理</string>
+    <string name="restart_share">重新啟動 OnePlus Share</string>
+    <string name="health_outdated">AirDrop 服務版本過舊</string>
 </resources>

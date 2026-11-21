@@ -12,8 +12,8 @@ android {
         applicationId = "com.owly.android"
         minSdk = 31
         targetSdk = 35
-        versionCode = 100
-        versionName = "1.0.0-mt6991"
+        versionCode = 103
+        versionName = "1.0.3-mt6991"
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -37,9 +37,22 @@ android {
     androidResources { noCompress += "zip" }
 
     lint { checkReleaseBuilds = true; abortOnError = true }
+
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/radioAssets"))
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
+// The installer scripts live once, in src/main/radio; the APK assets are generated from them.
+val syncRadioScripts by tasks.registering(Copy::class) {
+    from("src/main/radio") { include("install.sh", "remove.sh") }
+    into(layout.buildDirectory.dir("generated/radioAssets"))
+    rename { "radio-$it" }
+}
+tasks.named("preBuild") { dependsOn(syncRadioScripts) }
+
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303") // real JSON on the JVM; android.jar only has stubs
     val composeBom = platform("androidx.compose:compose-bom:2025.06.00")
     implementation(composeBom)
     implementation("androidx.compose.material3:material3")
